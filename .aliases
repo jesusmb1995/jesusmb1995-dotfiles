@@ -254,6 +254,12 @@ function git-resolve {
 	git status --short | grep '^UU' | awk '{print $2}' | xargs git add
 }
 
+function git-resolve-cherry-pick {
+	local root
+	root=$(git rev-parse --show-toplevel) || return 1
+	git diff --name-only --diff-filter=U -z | xargs -0 -I{} git add "$root/{}" && git cherry-pick --continue
+}
+
 # TODO: check if bear is available  
 function cmake-build {
 	bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -S . -B build ${@:2} && bear --append -- cmake --build build -j8
