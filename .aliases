@@ -55,8 +55,8 @@ source /home/jberlanga/Code/stg-nvim/stg-aliases.bash
 
 # Uncommit all commits since the upstream divergence point, turning them into StGit patches.
 # Usage: stg-uncommit-n [upstream-ref]
-# If no ref given, tries @{upstream}, then finds the upstream/* branch with the
-# most recent merge-base to HEAD.
+# If no ref given, tries: open PR base branch (via gpp strategy) → @{upstream} →
+# upstream/* branch with the most recent merge-base to HEAD.
 function stg-uncommit-n {
   local upstream_ref count
   if [[ -n "$1" ]]; then
@@ -66,7 +66,34 @@ function stg-uncommit-n {
       return 1
     fi
   else
-    upstream_ref=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+    if _git-pr-resolve-branch &>/dev/null; then
+      local pr_branch="$_GIT_PR_BRANCH"
+      local best_pr_upstream="" best_pr_count=999999999
+      local r url gh_repo base_ref c
+      for r in $(git remote); do
+        url=$(git remote get-url "$r")
+        gh_repo=$(echo "$url" | sed -n 's|.*github\.com[:/]\([^/]*/[^/.]*\)\(\.git\)\?$|\1|p')
+        [[ -z "$gh_repo" ]] && continue
+        base_ref=$(gh pr list -R "$gh_repo" -L 500 --json headRefName,baseRefName \
+          --jq '.[] | select(.headRefName=="'"$pr_branch"'") | .baseRefName' 2>/dev/null)
+        [[ $? -ne 0 ]] && continue
+        [[ -z "$base_ref" ]] && continue
+        if git rev-parse --verify "refs/remotes/$r/$base_ref" &>/dev/null; then
+          c=$(git rev-list --count "refs/remotes/$r/$base_ref..HEAD" 2>/dev/null)
+          if [[ "$c" -lt "$best_pr_count" ]]; then
+            best_pr_count="$c"
+            best_pr_upstream="refs/remotes/$r/$base_ref"
+          fi
+        fi
+      done
+      if [[ -n "$best_pr_upstream" ]]; then
+        upstream_ref="$best_pr_upstream"
+        echo "PR '$pr_branch' targets ${upstream_ref#refs/remotes/} ($best_pr_count commits ahead)"
+      fi
+    fi
+    if [[ -z "$upstream_ref" ]]; then
+      upstream_ref=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+    fi
     if [[ -z "$upstream_ref" ]]; then
       local best_ref best_base_ts=0
       local ref base ts
