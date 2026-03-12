@@ -359,7 +359,7 @@ function force-pull {
   local upstream remote branch force=false
   [[ "$1" == "-f" ]] && force=true
   upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
-  if [[ -n "$upstream" ]]; then
+  if [[ -n "$upstream" ]] && git rev-parse --verify "$upstream" &>/dev/null; then
     remote="${upstream%%/*}"
     branch="${upstream#*/}"
   else
@@ -378,7 +378,7 @@ function force-pull {
       fi
     fi
     upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
-    if [[ -n "$upstream" ]]; then
+    if [[ -n "$upstream" ]] && git rev-parse --verify "$upstream" &>/dev/null; then
       remote="${upstream%%/*}"
       branch="${upstream#*/}"
     else
