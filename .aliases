@@ -1,0 +1,403 @@
+#!/bin/bash
+
+alias j='jump $0'
+alias p='echo $PWD | xclip -selection clipboard'
+alias tb='tmux show-buffer -b $(tmux list-buffers | head -n 1 | cut -d: -f1) | xclip -selection clipboard'
+alias nvimf='NVIM_MINIMAL= nvim'
+
+# TODO create PR
+
+# Note:  gh repo set-default <target>
+# Should be set with target repo (not our fork)
+function pr {
+  if [[ -n "$1" && -n "$2" ]]; then
+    gh pr create --draft --repo "$1" --base "$2"
+  elif [[ -n "$1" ]]; then
+    gh pr create --draft --repo "$1"
+  else
+    gh pr create --draft
+  fi
+}
+
+alias temp-notes='vim $HOME/Documents/notes/tmp_notes.txt'
+alias aliases='vim $HOME/.aliases'
+
+function gh-clone-branch {
+  if [[ $# -lt 3 ]]; then
+    echo "Usage: gh-clone-branch <user> <repo> <branch> [other git args]"
+    return 1
+  fi
+  gh repo clone "${1}/${2}" -- --single-branch --branch="${3}" ${@:4}
+  cd "${2}"
+}
+
+#function move-to-storage {
+#   folder=$1
+#   storage=$2
+#   _user=$3
+#   #sudo mkdir -p $2/$1
+#   #sudo chown $_user:$_user $1
+#   sudo  
+
+function mv-ln-s {
+  mv "${1}" "${2}" && ln -s "${2}"/"${1}"
+}
+
+function coredumpctl-dbg-last {
+  coredumpctl list
+  # Get the last coredump ID (PID column, which is after the timestamp)
+  local last_coredump_id=$(coredumpctl list | tail -n 1 | awk '{print $5}')
+  echo "Debugging coredump ID: $last_coredump_id"
+  coredumpctl debug "$last_coredump_id"
+}
+
+source /home/jberlanga/Code/stg-nvim/stg-aliases.bash
+
+# Uncommit all commits since the upstream divergence point, turning them into StGit patches.
+# Usage: stg-uncommit-n [upstream-ref]
+# If no ref given, tries @{upstream}, then finds the upstream/* branch with the
+# most recent merge-base to HEAD.
+function stg-uncommit-n {
+  local upstream_ref count
+  if [[ -n "$1" ]]; then
+    upstream_ref="$1"
+    if ! git rev-parse --verify "$upstream_ref" &>/dev/null; then
+      echo "Error: '$upstream_ref' does not exist."
+      return 1
+    fi
+  else
+    upstream_ref=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+    if [[ -z "$upstream_ref" ]]; then
+      local best_ref best_base_ts=0
+      local ref base ts
+      for ref in $(git for-each-ref --format='%(refname:short)' refs/remotes/upstream/); do
+        base=$(git merge-base HEAD "$ref" 2>/dev/null) || continue
+        ts=$(git log -1 --format='%ct' "$base")
+        if [[ "$ts" -gt "$best_base_ts" ]]; then
+          best_base_ts="$ts"
+          best_ref="$ref"
+        fi
+      done
+      if [[ -z "$best_ref" ]]; then
+        echo "Error: no upstream/* branch shares history with HEAD."
+        return 1
+      fi
+      upstream_ref="$best_ref"
+    fi
+  fi
+  count=$(git rev-list --count "$upstream_ref..HEAD")
+  if [[ "$count" -eq 0 ]]; then
+    echo "No commits ahead of $upstream_ref."
+    return 0
+  fi
+  echo "Found $count commit(s) ahead of $upstream_ref:"
+  git log --oneline "$upstream_ref..HEAD"
+  echo -n "Run 'stg uncommit -n $count'? [y/N] "
+  read -r ans
+  if [[ "$ans" =~ ^[Yy]$ ]]; then
+    stg uncommit -n "$count"
+  else
+    echo "Cancelled."
+  fi
+}
+
+# Create symlinks for several files at once
+function ln-s-glob {
+  for file in $@; do
+    ln -s "$file"
+  done
+}
+
+# sorted
+function git-branch {
+ git for-each-ref --sort=-committerdate refs/heads/ --format='%(committerdate:short) %(refname:short)' | head -n 10
+}
+
+function git-exclude {
+ echo "${1}" >> .git/info/exclude
+}
+
+
+  # Resolve the current user's PR branch.
+  # Sets _GIT_PR_BRANCH on success; prints diagnostics and returns 1 on failure.
+  # Usage: _git-pr-resolve-branch [explicit-branch]
+function _git-pr-resolve-branch {
+    _GIT_PR_BRANCH=""
+    local username current_branch branch matches count
+    username=$(gh api user --jq .login 2>/dev/null)
+    if [[ -z "$username" ]]; then
+      echo "Could not determine GitHub username."
+      return 1
+    fi
+    current_branch=$(git branch --show-current 2>/dev/null)
+    [[ -n "$GPP_DEBUG" ]] && echo "[debug] username='$username'"
+    [[ -n "$GPP_DEBUG" ]] && echo "[debug] current_branch='$current_branch'"
+    matches=$(gh pr list -L 500 --json headRefName,author --jq \
+      '.[] | select(.author.login=="'"$username"'") | .headRefName')
+    [[ -n "$GPP_DEBUG" ]] && echo "[debug] matches='$matches'"
+    count=$(echo "$matches" | grep -c .)
+    [[ -n "$GPP_DEBUG" ]] && echo "[debug] count=$count"
+    if [[ $count -eq 0 ]]; then
+      echo "No PR branch for user '$username' found."
+      return 1
+    elif [[ $count -gt 1 ]]; then
+      if [[ -n "$1" ]]; then
+        if echo "$matches" | grep -Fxq "$1"; then
+          branch="$1"
+        else
+          echo "Branch '$1' is not one of your PR branches:"
+          echo "$matches"
+          return 1
+        fi
+      else
+        echo "Multiple PR branches for user '$username' found:"
+        echo "$matches"
+        if [[ -n "$current_branch" && ${#current_branch} -gt 1 ]]; then
+          local branch_without_num=$(echo "$current_branch" | sed 's/[0-9]*$//')
+          [[ -n "$GPP_DEBUG" ]] && echo "[debug] branch_without_num='$branch_without_num'"
+          if [[ "$branch_without_num" != "$current_branch" ]] && echo "$matches" | grep -Fxq "$branch_without_num"; then
+            branch="$branch_without_num"
+            echo "Using PR branch matching current without trailing number: $branch"
+          fi
+        fi
+        if [[ -z "$branch" ]]; then
+          branch=$(gh pr list --json headRefName,author,updatedAt --jq \
+            '.[] | select(.author.login=="'"$username"'") | [.headRefName, .updatedAt] | @tsv' \
+            | sort -k2 -r | head -n1 | cut -f1)
+          if [[ -z "$branch" ]]; then
+            echo "Could not determine most recent PR branch for user '$username'."
+            return 1
+          fi
+          echo "Picking most recent: $branch"
+        fi
+      fi
+    else
+      branch="$matches"
+    fi
+    _GIT_PR_BRANCH="$branch"
+}
+
+  # Usage: git-pr-push [-y] [branch]
+  # Finds your PR and pushes HEAD to it (force-with-lease). Prefers a PR whose branch
+  # is the current branch name without the last character (e.g. ...-cpp3 -> ...-cpp), then
+  # falls back to exact match or most recently updated.
+function git-pr-push {
+    _git-pr-resolve-branch "$1" || return 1
+    local branch="$_GIT_PR_BRANCH"
+    echo "Pushing HEAD to origin $branch (force-with-lease)..."
+    local confirm
+    if [[ " $@ " =~ " -y " ]]; then
+      confirm="y"
+    else
+      echo -n "Are you sure you want to push HEAD to origin $branch with --force-with-lease? [y/N] "
+      read confirm
+    fi
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+      git push origin HEAD:"$branch" --force-with-lease
+    else
+      echo "Push cancelled."
+    fi
+}
+
+alias gpp='git-pr-push'
+
+  # Usage: git-pr-open [branch]
+  # Opens the PR URL in the default browser.
+function git-pr-open {
+    _git-pr-resolve-branch "$1" || return 1
+    local branch="$_GIT_PR_BRANCH"
+    local username url
+    username=$(gh api user --jq .login 2>/dev/null)
+    url=$(gh pr list -L 500 --json headRefName,url,author --jq \
+      '.[] | select(.author.login=="'"$username"'" and .headRefName=="'"$branch"'") | .url')
+    if [[ -z "$url" ]]; then
+      echo "Could not find PR URL for branch '$branch'."
+      return 1
+    fi
+    echo "Opening $url"
+    xdg-open "$url"
+}
+
+alias gpo='git-pr-open'
+
+# print current commit hash
+function git-log-h1 {
+	git log | head -n 1 | awk '{print $NF}'
+}
+
+function git-log-n {
+  _n="$1"
+  git log -n "$_n" --pretty=%H | tee commits.txt
+}
+
+function cherry-pick-commits {
+ tac commits.txt | xargs git cherry-pick -m 1 --allow-empty
+}
+
+# requires:  brew install clang-format@20 && apt install clang-format-19
+function clangfh-diff {
+ git-clang-format-19 --diff HEAD^ --extensions h,hh,hpp,c,cc,cpp
+}
+function clangfh {
+ git-clang-format-19 HEAD^ --extensions h,hh,hpp,c,cc,cpp
+}
+function clangf-diff {
+ git-clang-format-19 --diff $1 --extensions h,hh,hpp,c,cc,cpp
+}
+
+function clangf {
+ git-clang-format-19 $1 --extensions h,hh,hpp,c,cc,cpp
+}
+
+# mark as resolved all git conflict
+function git-resolve {
+	git status --short | grep '^UU' | awk '{print $2}' | xargs git add
+}
+
+# TODO: check if bear is available  
+function cmake-build {
+	bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -S . -B build ${@:2} && bear --append -- cmake --build build -j8
+}
+
+function bare-make-build-debug {
+	bear --append -- bare-make generate -D CMAKE_EXPORT_COMPILE_COMMANDS=ON -D CMAKE_BUILD_TYPE=Debug ${@:1} && bear --append -- bare-make build 
+}
+
+function cmake-build-debug {
+	bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug -S . -B build ${@:2} && bear --append -- cmake --build build -j 8
+}
+
+function cmake-vcpkg-build-debug { 
+	bear --append -- cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/opt/vcpkg/scripts/buildsystems/vcpkg.cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug ${@:2} && bear --append -- cmake --build build -j 8 
+}
+
+function cmake-build-debug {
+bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=Debug -S . -B build ${@:2} && bear --append -- cmake --build build -j 8
+}
+
+
+function cmake-run {
+bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -S . -B build ${@:2} && bear --append -- cmake --build build --target "$1" -j8 --verbose && "./build/$1"
+}
+
+function cmake-help {
+bear --append -- cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -S . -B build ${@:2} && cmake --build build --target help
+}
+
+function venv-activate {
+source venv/bin/activate
+}
+
+function venv-create {
+  python -m venv venv
+}
+
+function venv-activate-dbg {
+source venv/bin/activate
+# Needed for DAP
+pip install debugpy
+}
+
+function stash-name {
+git stash push -m "$1"
+}
+
+function stash-apply {
+git stash apply stash^{/"$1"}
+}
+
+# Make sure neovim does not override standalone vim command
+function vim {
+  VIMRUNTIME=/usr/share/vim/vim91 /usr/bin/vim $@
+}
+
+function clang-format-all-dry {
+git ls-files | grep -E '\.(c|cpp|h|hpp|cc)$' | xargs clang-format --dry-run --Werror
+}
+
+
+# More reliable when trees have diverged: copy flat repo tree into current (package) dir.
+# Run from the package dir in the monorepo (e.g. packages/qvac-lib-infer-llamacpp-llm).
+# Usage: git-sync-from-flat-repo <path-to-flat-repo> [ref] [N]
+# ref defaults to HEAD. If N is given: only overwrite files changed in the last N commits
+# at ref; files not touched in those N commits are left as-is (local changes kept).
+# If N is omitted: full tree sync (all local changes overwritten).
+function git-sync-from-flat-repo {
+  local flat_repo ref n files
+  if [[ -z "$1" ]]; then
+    echo "Usage: git-sync-from-flat-repo <path-to-flat-repo> [ref] [N]"
+    return 1
+  fi
+  flat_repo="$1"
+  ref="${2:-HEAD}"
+  n="$3"
+  if [[ ! -d "$flat_repo/.git" ]]; then
+    echo "Not a git repo: $flat_repo"
+    return 1
+  fi
+  if [[ -z "$n" || ! "$n" =~ ^[0-9]+$ || "$n" -eq 0 ]]; then
+    (cd "$flat_repo" && git archive "$ref") | tar -x -C .
+    echo "Synced full tree $flat_repo @ $ref into $PWD."
+  else
+    # Files changed in last N commits may include renames/deletes; only archive paths that exist at ref
+    local changed at_ref
+    changed=$(cd "$flat_repo" && git log -n "$n" --name-only --pretty=format: "$ref" | sort -u | grep -v '^$')
+    at_ref=$(cd "$flat_repo" && git ls-tree -r --name-only "$ref" | sort)
+    files=$(comm -12 <(echo "$changed") <(echo "$at_ref"))
+    if [[ -z "$files" ]]; then
+      echo "No files changed in last $n commit(s) at $ref (or none exist at that ref)."
+      return 0
+    fi
+    # Pass one path per argument (zsh doesn't split $files on newlines; xargs does)
+    (cd "$flat_repo" && echo "$files" | xargs git archive "$ref" --) | tar -x -C .
+    echo "Synced $flat_repo @ $ref (last $n commits only) into $PWD. Files not touched in those commits left as-is."
+  fi
+  echo "Run: git status, fix conflicts, git add, git commit"
+}
+
+function force-pull {
+  local upstream remote branch force=false
+  [[ "$1" == "-f" ]] && force=true
+  upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+  if [[ -n "$upstream" ]]; then
+    remote="${upstream%%/*}"
+    branch="${upstream#*/}"
+  else
+    branch="$(git branch --show-current)"
+    if [[ -z "$branch" ]]; then
+      branch="$(git branch --points-at HEAD --format='%(refname:short)' | grep -v '^(' | head -n1)"
+    fi
+    if [[ -z "$branch" ]]; then
+      branch="$(git branch | sed -n 's/\* (HEAD detached at \(.*\))/\1/p')"
+      if [[ -n "$branch" ]]; then
+        echo "Detached HEAD at '$branch'. Creating local branch..."
+        git checkout -b "$branch" 2>/dev/null || git checkout "$branch"
+      else
+        echo "Error: cannot determine branch (detached HEAD with no matching branch)."
+        return 1
+      fi
+    fi
+    upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null)
+    if [[ -n "$upstream" ]]; then
+      remote="${upstream%%/*}"
+      branch="${upstream#*/}"
+    else
+      remote=""
+      local r
+      for r in $(git remote); do
+        if [[ "$branch" == "$r/"* ]]; then
+          remote="$r"
+          branch="${branch#$r/}"
+          break
+        fi
+      done
+      [[ -z "$remote" ]] && remote="origin"
+    fi
+  fi
+  if ! $force; then
+    echo "Will reset to $remote/$branch. Continue? [y/N]"
+    read -r ans
+    [[ "$ans" =~ ^[Yy]$ ]] || { echo "Aborted."; return 1; }
+  fi
+  git fetch "$remote" "$branch" && git reset --hard FETCH_HEAD
+}
