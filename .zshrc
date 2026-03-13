@@ -95,10 +95,36 @@ if [ -z "$TMUX" ]; then
   fi
   
   export TMUX_PREATTACH_PATH="$(pwd)"
-  kill -USR1 ${TMUX_WARM_DAEMON} 
+  kill -USR1 ${TMUX_WARM_DAEMON}
+
+  # $NVIM is set by Neovim in direct child shells. Propagate it into the
+  # global tmux env before the tmux plugin attaches to the pre-warmed session.
+  if [[ -n "$NVIM" ]]; then
+    tmux set-environment -g NVIM_TERM_DIR "$(pwd)" 2>/dev/null
+  fi
 fi
 
 source $ZSH/oh-my-zsh.sh
+
+# When a terminal is opened from Neovim, hide cwd and git info from the prompt
+# while still in the initial directory. Neovim sets NVIM_TERM_DIR in the tmux
+# environment via TermOpen autocmd; we pick it up here in the pre-warmed shell.
+_nvim_prompt_check() {
+  if [[ -n "$TMUX" && -z "$_NVIM_INITIAL_DIR" ]]; then
+    local val=$(tmux show-environment -g NVIM_TERM_DIR 2>/dev/null)
+    if [[ "$val" == NVIM_TERM_DIR=* ]]; then
+      _NVIM_INITIAL_DIR="${val#NVIM_TERM_DIR=}"
+      tmux set-environment -gu NVIM_TERM_DIR 2>/dev/null
+    fi
+  fi
+  if [[ -n "$_NVIM_INITIAL_DIR" && "$PWD" == "$_NVIM_INITIAL_DIR" ]]; then
+    PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} )%{$reset_color%}"
+  else
+    PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$fg[cyan]%}%c%{$reset_color%}"
+    PROMPT+=' $(git_prompt_info)'
+  fi
+}
+precmd_functions+=(_nvim_prompt_check)
 
 # User configuration
 bindkey -v
