@@ -141,6 +141,7 @@ _nvim_prompt_check() {
 
   if [[ -n "$_NVIM_INITIAL_DIR" && "$PWD" == "$_NVIM_INITIAL_DIR" ]]; then
     PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} )%{$reset_color%}"
+    PROMPT+=' $(_short_git_info)'
   elif [[ -n "$_SHELL_PROJECT_ROOT" && "$current_root" == "$_SHELL_PROJECT_ROOT" ]]; then
     if [[ "$PWD" == "$_SHELL_INITIAL_DIR" ]]; then
       PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} )%{$reset_color%}"
