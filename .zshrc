@@ -109,6 +109,22 @@ source $ZSH/oh-my-zsh.sh
 # When a terminal is opened from Neovim, hide cwd and git info from the prompt
 # while still in the initial directory. Neovim sets NVIM_TERM_DIR in the tmux
 # environment via TermOpen autocmd; we pick it up here in the pre-warmed shell.
+_short_git_info() {
+  local branch
+  branch=$(command git symbolic-ref --short HEAD 2>/dev/null) || return 0
+  local short
+  if (( ${#branch} > 6 )); then
+    short="${branch:0:2}${branch: -4}"
+  else
+    short="$branch"
+  fi
+  local indicator=""
+  if [[ "$(parse_git_dirty)" == "$ZSH_THEME_GIT_PROMPT_DIRTY" ]]; then
+    indicator=" %{$fg[yellow]%}%1{✗%}"
+  fi
+  echo "%{$fg[red]%}${short}%{$reset_color%}${indicator}%{$reset_color%} "
+}
+
 _nvim_prompt_check() {
   if [[ -n "$TMUX" && -z "$_NVIM_INITIAL_DIR" ]]; then
     local val=$(tmux show-environment -g NVIM_TERM_DIR 2>/dev/null)
@@ -117,8 +133,21 @@ _nvim_prompt_check() {
       tmux set-environment -gu NVIM_TERM_DIR 2>/dev/null
     fi
   fi
+  if [[ -z "$_SHELL_PROJECT_ROOT" ]]; then
+    _SHELL_PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+    _SHELL_INITIAL_DIR="$PWD"
+  fi
+  local current_root=$(git rev-parse --show-toplevel 2>/dev/null)
+
   if [[ -n "$_NVIM_INITIAL_DIR" && "$PWD" == "$_NVIM_INITIAL_DIR" ]]; then
     PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} )%{$reset_color%}"
+  elif [[ -n "$_SHELL_PROJECT_ROOT" && "$current_root" == "$_SHELL_PROJECT_ROOT" ]]; then
+    if [[ "$PWD" == "$_SHELL_INITIAL_DIR" ]]; then
+      PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} )%{$reset_color%}"
+    else
+      PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$fg[cyan]%}%c%{$reset_color%}"
+    fi
+    PROMPT+=' $(_short_git_info)'
   else
     PROMPT="%(?:%{$fg_bold[green]%}%1{➜%} :%{$fg_bold[red]%}%1{➜%} ) %{$fg[cyan]%}%c%{$reset_color%}"
     PROMPT+=' $(git_prompt_info)'
