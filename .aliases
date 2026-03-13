@@ -434,3 +434,10 @@ function force-pull {
   fi
   git fetch "$remote" "$branch" && git reset --hard FETCH_HEAD
 }
+
+grepvim() {
+  local pattern="$1"
+  local file="$2"
+  local outfile="${file}.grep.txt"
+  grep "$pattern" "$file" > "$outfile" && vim "$outfile"
+}
