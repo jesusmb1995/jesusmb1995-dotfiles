@@ -2,6 +2,7 @@
 
 alias j='jump $0'
 alias p='echo $PWD | xclip -selection clipboard'
+alias brc='git branch --show-current | xclip -selection clipboard'
 alias tb='tmux show-buffer -b $(tmux list-buffers | head -n 1 | cut -d: -f1) | xclip -selection clipboard'
 alias nvimf='NVIM_MINIMAL= nvim'
 
